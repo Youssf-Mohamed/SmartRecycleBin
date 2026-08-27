@@ -1,0 +1,6 @@
+@SmartRecycleBin_HostAddress = http://localhost:5094
+
+GET {{SmartRecycleBin_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

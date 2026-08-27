@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: smart-recycle-bin
+    env: docker
+    dockerfilePath: ./SmartRecycleBin/Dockerfile
+    dockerContext: ./SmartRecycleBin
+    plan: free
+    healthCheckPath: /api/classification/health
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: Supabase__Url
+        value: https://xjjlsxsdjbgrhsnncfdg.supabase.co
+      - key: Supabase__Key
+        sync: false  # set in Render dashboard: eyJhbGci...
+      - key: ASPNETCORE_URLS
+        value: http://+:10000
