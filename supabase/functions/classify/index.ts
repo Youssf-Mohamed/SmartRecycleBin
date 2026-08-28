@@ -1,15 +1,19 @@
-// Supabase Edge Function - runs ONNX-free via HF Inference API (free, no card)
+// Supabase Edge Function - HF Inference API proxy (free, no 50M limit, no private)
+// Hosts your 344M ONNX (model.onnx + model.onnx.data) via HF Hub Inference - HF handles ONNX
 // Deploy: npx supabase link --project-ref xjjlsxsdjbgrhsnncfdg && npx supabase functions deploy classify --no-verify-jwt
-// Env: HF_TOKEN (your hf_vip...), SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+// Env: HF_TOKEN (hf_vip...), SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
-const HF_MODEL = Deno.env.get("HF_MODEL") ?? "watersplash/waste-classification";
+const HF_MODEL = Deno.env.get("HF_MODEL") ?? "Joe-3/smart-recycle-bin";
 const HF_TOKEN = Deno.env.get("HF_TOKEN") ?? Deno.env.get("HUGGINGFACE_TOKEN") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const BIN_MAP: Record<string, string> = {
+  // 5-class fine-tuned (your category_augmented) 99.38% - 344M ONNX
+  biological: "organic", metal: "metal", paper: "paper", plastic: "plastic", trash: "general",
+  // 12-class base fallback (watersplash)
   Battery: "hazardous", Biological: "organic", "Brown-glass": "glass",
   Cardboard: "paper", Clothes: "textile", "Green-Glass": "glass",
   Metal: "metal", Paper: "paper", Plastic: "plastic", Shoes: "textile",
@@ -17,7 +21,6 @@ const BIN_MAP: Record<string, string> = {
 };
 
 Deno.serve(async (req) => {
-  // CORS
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders() });
   }
@@ -34,9 +37,8 @@ Deno.serve(async (req) => {
 
     const bytes = new Uint8Array(await file.arrayBuffer());
 
-    // 1. Call HF Inference API (free) — HF does the ONNX inference, we just proxy
-    // HF Inference is free for public models, no ONNX download needed
-    const hfRes = await fetch(`https://api-inference.huggingface.co/models/${HF_MODEL}`, {
+    // 1. Call HF Inference API via router (HF handles 344M ONNX, Edge Function just proxies - no 50M Storage limit)
+    const hfRes = await fetch(`https://router.huggingface.co/hf-inference/models/${HF_MODEL}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${HF_TOKEN}`,
@@ -49,7 +51,6 @@ Deno.serve(async (req) => {
       return json({ error: `HF inference failed: ${hfRes.status} ${txt}` }, 502);
     }
     const hfData: { label: string; score: number }[] = await hfRes.json();
-    // hfData: [{"label":"Plastic","score":0.98}, ...] sorted desc
 
     const top = hfData[0];
     const predicted = top.label;
@@ -57,11 +58,9 @@ Deno.serve(async (req) => {
     const allScores: Record<string, number> = {};
     for (const r of hfData) allScores[r.label] = r.score;
 
-    // 2. Save to Supabase DB (service_role bypasses RLS) — optional, ignore errors
     let savedId: string | null = null;
     try {
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      // Optional: upload image to storage
       const fileName = `${crypto.randomUUID()}_${file.name || "image.jpg"}`;
       const path = `predictions/${fileName}`;
       const { error: upErr } = await supabase.storage.from("images").upload(path, bytes, {
@@ -77,9 +76,7 @@ Deno.serve(async (req) => {
         all_scores: allScores,
       }).select("id").single();
       if (!error && data) savedId = data.id;
-    } catch (_e) {
-      // storage/DB is optional - still return prediction
-    }
+    } catch (_e) {}
 
     return json({
       predictedLabel: predicted,
